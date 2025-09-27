@@ -5,7 +5,7 @@ library(stringr)
 library(janitor)
 library(gendercoder)
 library(readr)
-x = readxl::read_excel(here("/Users/tobyurban/Downloads", "DATA2x02_survey_2025_Responses.xlsx"))
+x = readxl::read_excel("DATA2x02_survey_2025_Responses.xlsx")
 
 
 
