@@ -36,7 +36,6 @@ num_list <- list(
 cat_list <- list(
   target_grade = cleaned_target_grade,
   assignment = cleaned_assignment,
-  trimester_or_semester = cleaned_trimester_or_semester,
   tendency_yes_or_no = cleaned_tendency_yes_or_no,
   pay_rent = cleaned_pay_rent,
   stall_choice = cleaned_stall_choice,
