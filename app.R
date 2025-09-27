@@ -1,9 +1,7 @@
 #
 # This is a Shiny web application. You can run the application by clicking
 # the 'Run App' button above.
-#
 # Find out more about building applications with Shiny here:
-#
 #    https://shiny.posit.co/
 #
 
@@ -15,6 +13,7 @@ library(stringr)
 
 source('Data_cleaning_2902.r')
 
+# Define the list of numeric variables
 num_list <- list(
   age = cleaned_age,
   weetbix_count = cleaned_weetbix_count,
@@ -33,7 +32,7 @@ num_list <- list(
   wam = cleaned_wam
 )
 
-# Create a list of categorical variables
+# Define the list of categorical variables
 cat_list <- list(
   target_grade = cleaned_target_grade,
   assignment = cleaned_assignment,
@@ -67,9 +66,9 @@ cleaned_data_list <- list(
   categorical = cat_list
 )
 
-combined_var_names <- c(names(cleaned_data_list$numeric), names(cleaned_data_list$categorical))
+combined_var_names <- c(names(cleaned_data_list$numeric),
+                        names(cleaned_data_list$categorical))
 
-# Define UI
 ui <- fluidPage(
   titlePanel("Variable Selector and Statistical Tests"),
   sidebarLayout(
@@ -80,34 +79,54 @@ ui <- fluidPage(
                   choices = c("Select a variable" = "", combined_var_names),
                   selected = ""),
       
-      # Dropdown to select a categorical variable only
+      # Dropdown to select a categorical variable (grouping variable)
       selectInput("var2",
-                  "Select a Categorical Variable:",
+                  "Select a Grouping (Categorical) Variable:",
                   choices = c("Select a variable" = "", names(cleaned_data_list$categorical)),
-                  selected = "")
+                  selected = ""),
+      
+      # Dynamic UI for level selection when the grouping variable has >2 levels.
+      uiOutput("levelSelectors")
     ),
     mainPanel(
       h3("Current Selections"),
       verbatimTextOutput("selected_vars"),
-      
-      # Show analysis results
       uiOutput("analysis_output")
     )
   )
 )
 
-# Define Server
 server <- function(input, output, session) {
   
-  # Print the selected variable names
+  # Print the currently selected variables
   output$selected_vars <- renderPrint({
     list(
-      Selected_Any_Variable = if(input$var1 == "") "None selected" else input$var1,
-      Selected_Categorical_Variable = if(input$var2 == "") "None selected" else input$var2
+      Selected_Var1 = if(input$var1 == "") "None selected" else input$var1,
+      Selected_Grouping_Variable = if(input$var2 == "") "None selected" else input$var2
     )
   })
   
-  # Determine which test to show and generate appropriate output
+  # Dynamically create level selectors for a grouping variable with >2 levels
+  output$levelSelectors <- renderUI({
+    # Only applicable when var1 (numeric) and var2 (categorical) are selected
+    if (input$var1 != "" && input$var2 != "" && (input$var1 %in% names(cleaned_data_list$numeric))) {
+      grp_vec <- cleaned_data_list$categorical[[input$var2]]
+      if (!is.null(grp_vec)) {
+        df_temp <- data.frame(group = as.factor(grp_vec))
+        lvl <- levels(df_temp$group)
+        if (length(lvl) > 2) {
+          tagList(
+            selectInput("selectedLevel1", "Select First Level:",
+                        choices = lvl, selected = lvl[1]),
+            selectInput("selectedLevel2", "Select Second Level:",
+                        choices = lvl, selected = lvl[2])
+          )
+        }
+      }
+    }
+  })
+  
+  # analysis_output selects which test to perform and what UI to show
   output$analysis_output <- renderUI({
     
     # Check if both variables are selected
@@ -118,7 +137,7 @@ server <- function(input, output, session) {
       ))
     }
     
-    # Check if first variable is categorical (Chi-square test)
+    # If var1 is categorical --> Chi-square test components as before
     if (input$var1 %in% names(cleaned_data_list$categorical)) {
       return(tagList(
         h3("Chi-Square Test Summary"),
@@ -128,26 +147,28 @@ server <- function(input, output, session) {
       ))
     }
     
-    # Check if first variable is numeric (T-test)
+    # If var1 is numeric --> Independent two-sample test (t-test or ANOVA)
     if (input$var1 %in% names(cleaned_data_list$numeric)) {
       return(tagList(
-        h3("Two-Sample T-Test Summary"),
+        h3("Two-Sample T-Test / ANOVA Summary"),
         verbatimTextOutput("tTestSummary"),
-        h3("Box Plot Visualization"),
+        h3("Boxplot Visualization"),
         plotOutput("tTestPlot")
       ))
     }
     
-    # Default case
+    # Fallback if none of the above
     return(tagList(
       h3("No Test Available"),
       p("No appropriate statistical test available for the selected variable combination.")
     ))
   })
   
+  # ========================
   # CHI-SQUARE TEST COMPONENTS
+  # ========================
   
-  # Reactive: Retrieve the first variable if it is categorical
+  # Get the first variable from categorical list if var1 is categorical.
   selected_cat1 <- reactive({
     if (input$var1 %in% names(cleaned_data_list$categorical)) {
       return(cleaned_data_list$categorical[[input$var1]])
@@ -156,7 +177,7 @@ server <- function(input, output, session) {
     }
   })
   
-  # Since var2 is always categorical, simply retrieve it.
+  # Since var2 is always categorical, retrieve it.
   selected_cat2 <- reactive({
     if (input$var2 != "") {
       return(cleaned_data_list$categorical[[input$var2]])
@@ -165,65 +186,60 @@ server <- function(input, output, session) {
     }
   })
   
-  # Combine the two categorical variables into a data frame
+  # Build a data frame for two categorical variables
   df_pair_cat <- reactive({
     vec1 <- selected_cat1()
     vec2 <- selected_cat2()
     
     if (is.null(vec1) || is.null(vec2)) return(NULL)
-    
-    n_min <- min(length(vec1), length(vec2))
-    if(length(vec1) != length(vec2)) {
-      message("Lengths differ: using first ", n_min, " observations from each variable.")
-    }
-    data.frame(cat1 = vec1[1:n_min],
-               cat2 = vec2[1:n_min],
+    n_common <- min(length(vec1), length(vec2))
+    data.frame(cat1 = vec1[1:n_common],
+               cat2 = vec2[1:n_common],
                stringsAsFactors = TRUE)
   })
   
-  # Create a contingency table from the data frame
+  # Contingency table for chi-square test
   contingency_table <- reactive({
     df <- df_pair_cat()
     if (is.null(df)) return(NULL)
     table(df$cat1, df$cat2)
   })
   
-  # Perform a chi-square test on the contingency table if valid
+  # Chi-square test
   chi_test <- reactive({
     tbl <- contingency_table()
     if (is.null(tbl)) return(NULL)
     if (all(dim(tbl) > 1)) {
-      test <- chisq.test(tbl)
-      return(test)
+      chisq.test(tbl)
     } else {
-      return(NULL)
+      NULL
     }
   })
   
-  # Output the chi-square test summary
   output$chiSummary <- renderPrint({
     if (is.null(chi_test())) {
       cat("Chi-Square Test cannot be performed.\n")
-      cat("Ensure that both selected variables are categorical and that there are at least 2 levels per variable.\n")
+      cat("Ensure that both selected variables are categorical and each has at least 2 levels.\n")
     } else {
       print(chi_test())
     }
   })
   
-  # Output the mosaic plot of the contingency table
   output$chiPlot <- renderPlot({
     tbl <- contingency_table()
     if (is.null(tbl)) {
       plot.new()
-      text(0.5, 0.5, "No mosaic plot available.\nSelect two categorical variables.")
+      text(0.5, 0.5, "No mosaic plot available.\nSelect two categorical variables with at least 2 levels each.")
     } else {
       mosaicplot(tbl, main = "Mosaic Plot", color = TRUE)
     }
   })
   
-  # T-TEST COMPONENTS
+  # ========================
+  # T-TEST / ANOVA COMPONENTS (Numeric vs. Categorical)
+  # ========================
   
-  # Get numeric variable
+  # Get numeric variable for var1
   selected_num <- reactive({
     if (input$var1 %in% names(cleaned_data_list$numeric)) {
       return(cleaned_data_list$numeric[[input$var1]])
@@ -232,100 +248,81 @@ server <- function(input, output, session) {
     }
   })
   
-  # Combine numeric and categorical variables into a data frame
+  # Build a data frame that combines the numeric variable and the grouping variable (var2)
   df_pair_t <- reactive({
     num_vec <- selected_num()
-    cat_vec <- selected_cat2()
+    cat_vec <- cleaned_data_list$categorical[[input$var2]]
     
     if (is.null(num_vec) || is.null(cat_vec)) return(NULL)
     
-    n_min <- min(length(num_vec), length(cat_vec))
-    if(length(num_vec) != length(cat_vec)) {
-      message("Lengths differ: using first ", n_min, " observations from each variable.")
-    }
+    n_common <- min(length(num_vec), length(cat_vec))
+    df <- data.frame(numeric_var = num_vec[1:n_common],
+                     categorical_var = as.factor(cat_vec[1:n_common]),
+                     stringsAsFactors = TRUE)
+    df <- df[complete.cases(df), ]
     
-    data.frame(numeric_var = num_vec[1:n_min],
-               categorical_var = as.factor(cat_vec[1:n_min]),
-               stringsAsFactors = TRUE)
+    # If there are more than 2 groups, check if dynamic level selection is available;
+    # if yes, filter to only these two levels.
+    if(nlevels(df$categorical_var) > 2) {
+      if(!is.null(input$selectedLevel1) && !is.null(input$selectedLevel2)) {
+        df <- df %>% filter(categorical_var %in% c(input$selectedLevel1, input$selectedLevel2))
+        df$categorical_var <- droplevels(df$categorical_var)
+      }
+    }
+    return(df)
   })
   
-  # Perform t-test
+  # Run t-test (or ANOVA if more than 2 groups remain)
   t_test_result <- reactive({
     df <- df_pair_t()
-    if (is.null(df)) return(NULL)
+    if (is.null(df) || nrow(df) < 2) return("Not enough data to perform the test.")
     
-    # Remove NA values
-    df_complete <- df[complete.cases(df), ]
-    if (nrow(df_complete) == 0) return(NULL)
-    
-    # Check if categorical variable has exactly 2 levels
-    if (length(levels(df_complete$categorical_var)) != 2) {
-      return("error_not_two_levels")
-    }
-    
-    # Perform t-test
-    tryCatch({
-      t.test(numeric_var ~ categorical_var, data = df_complete)
-    }, error = function(e) {
-      return(paste("Error in t-test:", e$message))
-    })
-  })
-  
-  # Output t-test summary
-  output$tTestSummary <- renderPrint({
-    result <- t_test_result()
-    if (is.null(result)) {
-      cat("T-test cannot be performed.\n")
-      cat("Please ensure both variables are selected and contain valid data.\n")
-    } else if (is.character(result) && result == "error_not_two_levels") {
-      cat("T-test cannot be performed.\n")
-      cat("The categorical variable must have exactly 2 levels for a two-sample t-test.\n")
-      df <- df_pair_t()
-      if (!is.null(df)) {
-        cat("Current levels:", paste(levels(df$categorical_var), collapse = ", "), "\n")
-        cat("Number of levels:", length(levels(df$categorical_var)), "\n")
-      }
-    } else if (is.character(result)) {
-      cat(result, "\n")
+    groups <- levels(df$categorical_var)
+    if(length(groups) < 2) {
+      return("At least two groups are needed for comparison.")
+    } else if(length(groups) == 2) {
+      # Independent two-sample t-test (Welch's by default)
+      tryCatch({
+        t.test(numeric_var ~ categorical_var, data = df)
+      }, error = function(e) {
+        paste("Error in t-test:", e$message)
+      })
     } else {
-      print(result)
-      
-      # Add interpretation
-      cat("\n--- Interpretation ---\n")
-      if (result$p.value < 0.05) {
-        cat("Result: Statistically significant difference (p < 0.05)\n")
-        cat("Conclusion: There is evidence of a difference in means between the two groups.\n")
+      # More than 2 groups: perform ANOVA.
+      fit <- aov(numeric_var ~ categorical_var, data = df)
+      summary(fit)
+    }
+  })
+  
+  output$tTestSummary <- renderPrint({
+    res <- t_test_result()
+    if (is.null(res)) {
+      cat("Test cannot be performed.\nEnsure that both variables contain valid data.")
+    } else {
+      if (is.character(res)) {
+        cat(res)
       } else {
-        cat("Result: No statistically significant difference (p >= 0.05)\n")
-        cat("Conclusion: There is insufficient evidence of a difference in means between the two groups.\n")
+        print(res)
+        # Simple interpretation
+        if(is.list(res) && !is.null(res$p.value)) {
+          cat("\n--- Interpretation ---\n")
+          if (res$p.value < 0.05) {
+            cat("Statistically significant difference (p < 0.05).\n")
+          } else {
+            cat("No statistically significant difference (p >= 0.05).\n")
+          }
+        }
       }
     }
   })
   
-  # Output box plot for t-test
   output$tTestPlot <- renderPlot({
     df <- df_pair_t()
-    if (is.null(df)) {
+    if (is.null(df) || nrow(df) < 1) {
       plot.new()
-      text(0.5, 0.5, "No box plot available.\nSelect a numeric and categorical variable.")
-      return()
-    }
-    
-    # Remove NA values
-    df_complete <- df[complete.cases(df), ]
-    if (nrow(df_complete) == 0) {
-      plot.new()
-      text(0.5, 0.5, "No data available after removing missing values.")
-      return()
-    }
-    
-    if (length(levels(df_complete$categorical_var)) != 2) {
-      plot.new()
-      text(0.5, 0.5, paste("Box plot not available.\nCategorical variable must have exactly 2 levels.\nCurrent levels:", 
-                           length(levels(df_complete$categorical_var))))
+      text(0.5, 0.5, "No box plot available.\nSelect an appropriate numeric and categorical variable.")
     } else {
-      boxplot(numeric_var ~ categorical_var, 
-              data = df_complete,
+      boxplot(numeric_var ~ categorical_var, data = df,
               main = paste("Box Plot:", input$var1, "by", input$var2),
               xlab = input$var2,
               ylab = input$var1,
@@ -334,5 +331,4 @@ server <- function(input, output, session) {
   })
 }
 
-# Run the app
 shinyApp(ui = ui, server = server)
