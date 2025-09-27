@@ -90,6 +90,10 @@ ui <- fluidPage(
     mainPanel(
       h3("Current Selections"),
       verbatimTextOutput("selected_vars"),
+      
+      # Dynamic assumptions checker
+      uiOutput("assumptions_check"),
+      
       uiOutput("analysis_output")
     )
   )
@@ -123,6 +127,236 @@ server <- function(input, output, session) {
         }
       }
     }
+  })
+  
+  # Dynamic assumption checker
+  output$assumptions_check <- renderUI({
+    if (input$var1 == "" || input$var2 == "") {
+      return(NULL)
+    }
+    
+    # Show assumptions for both chi-square and t-test
+    if (input$var1 %in% names(cleaned_data_list$categorical)) {
+      tagList(
+        h3("Chi-Square Test Assumptions"),
+        verbatimTextOutput("chi_assumptions")
+      )
+    } else if (input$var1 %in% names(cleaned_data_list$numeric)) {
+      tagList(
+        h3("T-Test Assumptions"),
+        verbatimTextOutput("t_test_assumptions")
+      )
+    }
+  })
+  
+  # Chi-square assumptions checker - (ALL frequencies ≥ 5)
+  output$chi_assumptions <- renderText({
+    # Use the same chi-square result that the actual test uses
+    chi_result <- chi_test()
+    if (is.null(chi_result)) {
+      return("Cannot check assumptions - chi-square test cannot be performed.")
+    }
+    
+    expected_freq <- chi_result$expected
+    
+    min_expected <- min(expected_freq)
+    violations <- sum(expected_freq < 5)
+    total_cells <- length(expected_freq)
+    
+    assumption_text <- paste(
+      "Chi-Square Test Assumptions:",
+      paste("- ALL expected frequencies must be ≥ 5 (np ≥ 5 and n(1-p) ≥ 5)"),
+      paste("- This ensures the chi-square statistic follows the chi-square distribution"),
+      "",
+      "Results:",
+      paste("- Minimum expected frequency:", round(min_expected, 2)),
+      paste("- Cells with expected frequency < 5:", violations, "out of", total_cells),
+      sep = "\n"
+    )
+    
+    # Show individual expected frequencies for transparency
+    assumption_text <- paste(assumption_text,
+                             "\nExpected frequencies table:",
+                             sep = "\n")
+    
+    # Add expected frequencies display
+    expected_display <- capture.output(print(round(expected_freq, 2)))
+    assumption_text <- paste(assumption_text,
+                             paste(expected_display, collapse = "\n"),
+                             sep = "\n")
+    
+    # Evaluation - must have ALL cells ≥ 5
+    if (violations == 0) {
+      assumption_text <- paste(assumption_text, 
+                               "\n✓ ASSUMPTION MET: All expected frequencies ≥ 5", 
+                               "\nChi-square test is valid and reliable.",
+                               sep = "\n")
+    } else {
+      assumption_text <- paste(assumption_text, 
+                               "\n✗ ASSUMPTION VIOLATED: Some expected frequencies < 5", 
+                               paste("\nNumber of violating cells:", violations),
+                               "\nRecommendations:",
+                               "- Use Fisher's exact test instead",
+                               "- Combine categories if theoretically justified",
+                               "- Collect more data",
+                               "\n⚠ WARNING: Chi-square results may be unreliable!",
+                               sep = "\n")
+    }
+    
+    return(assumption_text)
+  })
+  
+  # T-test assumptions checker 
+  output$t_test_assumptions <- renderText({
+    df <- df_pair_t()
+    if (is.null(df) || nrow(df) < 2) {
+      return("Cannot check assumptions - insufficient data available.")
+    }
+    
+    groups <- levels(df$categorical_var)
+    if (length(groups) != 2) {
+      return("Strict assumption checking only available for two-group comparisons.")
+    }
+    
+    # Sample sizes for each group
+    group_sizes <- table(df$categorical_var)
+    total_n <- sum(group_sizes)
+    
+    assumption_text <- paste(
+      "Two-Sample T-Test Assumptions:",
+      "",
+      "1. NORMALITY: Data in each group must be approximately normally distributed",
+      "2. INDEPENDENCE: Observations must be independent",
+      "3. EQUAL VARIANCES: Groups must have equal population variances (for pooled t-test)",
+      "",
+      "Sample Information:",
+      paste("- Group sizes:", paste(names(group_sizes), "=", group_sizes, collapse = ", ")),
+      paste("- Total sample size:", total_n),
+      "",
+      sep = "\n"
+    )
+    
+    # Normality check using Shapiro-Wilk test
+    assumption_text <- paste(assumption_text,
+                             "NORMALITY CHECK (Shapiro-Wilk test, p > 0.05 indicates normality):",
+                             sep = "\n")
+    
+    normality_violations <- 0
+    for (group_name in names(group_sizes)) {
+      group_data <- df$numeric_var[df$categorical_var == group_name]
+      group_data <- group_data[!is.na(group_data)]
+      
+      if (length(group_data) >= 3 && length(group_data) <= 5000) {
+        shapiro_result <- shapiro.test(group_data)
+        p_val <- shapiro_result$p.value
+        w_stat <- shapiro_result$statistic
+        
+        if (p_val > 0.05) {
+          status <- "✓ Normal"
+        } else {
+          status <- "✗ Non-normal"
+          normality_violations <- normality_violations + 1
+        }
+        
+        # Better formatting for very small p-values
+        p_display <- if (p_val < 0.001) {
+          paste("< 0.001")
+        } else {
+          paste("=", round(p_val, 3))
+        }
+        
+        assumption_text <- paste(assumption_text,
+                                 paste("  ", group_name, ": W =", round(w_stat, 4),
+                                       ", p", p_display, "-", status),
+                                 paste("    (n =", length(group_data), "observations)"),
+                                 sep = "\n")
+      } else if (length(group_data) > 5000) {
+        assumption_text <- paste(assumption_text,
+                                 paste("  ", group_name, ": Sample too large for Shapiro-Wilk test",
+                                       "(n =", length(group_data), ") - use other normality tests"),
+                                 sep = "\n")
+      } else {
+        assumption_text <- paste(assumption_text,
+                                 paste("  ", group_name, ": Sample size too small for reliable test",
+                                       "(n =", length(group_data), ")"),
+                                 sep = "\n")
+      }
+    }
+    
+    
+    
+    # Equal variances check (F-test)
+    tryCatch({
+      var_test <- var.test(numeric_var ~ categorical_var, data = df)
+      var_p_value <- var_test$p.value
+      
+      assumption_text <- paste(assumption_text,
+                               "",
+                               "EQUAL VARIANCES CHECK (F-test, p > 0.05 indicates equal variances):",
+                               paste("  F-statistic =", round(var_test$statistic, 4)),
+                               paste("  p-value =", round(var_p_value, 4)),
+                               if (var_p_value > 0.05) "  ✓ Equal variances" else "  ✗ Unequal variances",
+                               sep = "\n")
+    }, error = function(e) {
+      assumption_text <- paste(assumption_text,
+                               "",
+                               "EQUAL VARIANCES CHECK: Cannot perform F-test",
+                               sep = "\n")
+      var_p_value <- NA
+    })
+    
+    # Sample size adequacy (n ≥ 30 per group for robustness)
+    small_sample_groups <- sum(group_sizes < 30)
+    assumption_text <- paste(assumption_text,
+                             "",
+                             "SAMPLE SIZE ADEQUACY (n ≥ 30 per group for robustness to non-normality):",
+                             paste("  Groups with n < 30:", small_sample_groups, "out of", length(group_sizes)),
+                             sep = "\n")
+    
+    
+    assumptions_met <- TRUE
+    warning_messages <- c()
+    
+    if (normality_violations > 0) {
+      assumptions_met <- FALSE
+      warning_messages <- c(warning_messages, "Non-normal data detected")
+    }
+    
+    if (!is.na(var_p_value) && var_p_value <= 0.05) {
+      assumptions_met <- FALSE
+      warning_messages <- c(warning_messages, "Unequal variances detected")
+    }
+    
+    if (small_sample_groups > 0) {
+      assumptions_met <- FALSE
+      warning_messages <- c(warning_messages, "Small sample sizes detected")
+    }
+    
+    assumption_text <- paste(assumption_text,
+                             "",
+                             "====== ASSESSMENT ======",
+                             sep = "\n")
+    
+    if (assumptions_met) {
+      assumption_text <- paste(assumption_text,
+                               "✓ ALL ASSUMPTIONS MET: T-test is appropriate and reliable",
+                               sep = "\n")
+    } else {
+      assumption_text <- paste(assumption_text,
+                               "✗ ASSUMPTIONS VIOLATED:",
+                               paste("  -", warning_messages, collapse = "\n"),
+                               "",
+                               "RECOMMENDATIONS:",
+                               "- Use Welch's t-test for unequal variances (R default)",
+                               "- Consider Mann-Whitney U test for non-normal data",
+                               "- Bootstrap or permutation tests for small samples",
+                               "- Transform data if appropriate",
+                               "",
+                               "⚠ WARNING: Standard t-test results may be unreliable!",
+                               sep = "\n")
+    }
+    
+    return(assumption_text)
   })
   
   # analysis_output selects which test to perform and what UI to show
@@ -209,7 +443,11 @@ server <- function(input, output, session) {
     tbl <- contingency_table()
     if (is.null(tbl)) return(NULL)
     if (all(dim(tbl) > 1)) {
-      chisq.test(tbl)
+      tryCatch({
+        chisq.test(tbl)
+      }, error = function(e) {
+        return(NULL)
+      })
     } else {
       NULL
     }
