@@ -73,27 +73,29 @@ combined_var_names <- c(names(cleaned_data_list$numeric), names(cleaned_data_lis
 
 
 
-
-
 ui <- fluidPage(
-  titlePanel("Variable Selector"),
+  titlePanel("Variable Selector and Chi-Square Test"),
   sidebarLayout(
     sidebarPanel(
-      # Dropdown for selecting any variable (numeric or categorical)
+      # Dropdown to select any variable (numeric or categorical)
       selectInput("var1", 
                   "Select any Variable (Numeric or Categorical):", 
                   choices = combined_var_names,
                   selected = combined_var_names[1]),
       
-      # Dropdown for selecting a categorical variable only
+      # Dropdown to select a categorical variable only
       selectInput("var2",
                   "Select a Categorical Variable:",
                   choices = names(cleaned_data_list$categorical),
                   selected = names(cleaned_data_list$categorical)[1])
     ),
     mainPanel(
-      h3("Selected Variables"),
-      verbatimTextOutput("selected_vars")
+      h3("Current Selections"),
+      verbatimTextOutput("selected_vars"),
+      h3("Chi-Square Test Summary"),
+      verbatimTextOutput("chiSummary"),
+      h3("Mosaic Plot Visualization"),
+      plotOutput("chiPlot")
     )
   )
 )
@@ -101,11 +103,86 @@ ui <- fluidPage(
 # Define Server
 server <- function(input, output, session) {
   
+  # Print the selected variable names
   output$selected_vars <- renderPrint({
     list(
       Selected_Any_Variable = input$var1,
       Selected_Categorical_Variable = input$var2
     )
+  })
+  
+  # Reactive: Retrieve the first variable if it is categorical;
+  # if it is numeric, set to NULL.
+  selected_cat1 <- reactive({
+    if (input$var1 %in% names(cleaned_data_list$categorical)) {
+      return(cleaned_data_list$categorical[[input$var1]])
+    } else {
+      return(NULL)
+    }
+  })
+  
+  # Since var2 is always categorical, simply retrieve it.
+  selected_cat2 <- reactive({
+    return(cleaned_data_list$categorical[[input$var2]])
+  })
+  
+  # Combine the two variables into a data frame.
+  # If the vectors have different lengths, we use the first n observations,
+  # where n is the minimum length.
+  df_pair <- reactive({
+    vec1 <- selected_cat1()
+    vec2 <- selected_cat2()
+    
+    # Only proceed if the first selected variable is categorical
+    if (is.null(vec1)) return(NULL)
+    
+    n_min <- min(length(vec1), length(vec2))
+    if(length(vec1) != length(vec2)) {
+      message("Lengths differ: using first ", n_min, " observations from each variable.")
+    }
+    data.frame(cat1 = vec1[1:n_min],
+               cat2 = vec2[1:n_min],
+               stringsAsFactors = TRUE)
+  })
+  
+  # Create a contingency table from the data frame
+  contingency_table <- reactive({
+    df <- df_pair()
+    if (is.null(df)) return(NULL)
+    table(df$cat1, df$cat2)
+  })
+  
+  # Perform a chi-square test on the contingency table if valid
+  chi_test <- reactive({
+    tbl <- contingency_table()
+    if (is.null(tbl)) return(NULL)
+    if (all(dim(tbl) > 1)) {
+      test <- chisq.test(tbl)
+      return(test)
+    } else {
+      return(NULL)
+    }
+  })
+  
+  # Output the chi-square test summary
+  output$chiSummary <- renderPrint({
+    if (is.null(chi_test())) {
+      cat("Chi-Square Test cannot be performed.\n")
+      cat("Ensure that both selected variables are categorical and that there are at least 2 levels per variable.\n")
+    } else {
+      print(chi_test())
+    }
+  })
+  
+  # Output the mosaic plot of the contingency table
+  output$chiPlot <- renderPlot({
+    tbl <- contingency_table()
+    if (is.null(tbl)) {
+      plot.new()
+      text(0.5, 0.5, "No mosaic plot available.\nSelect two categorical variables.")
+    } else {
+      mosaicplot(tbl, main = "Mosaic Plot", color = TRUE)
+    }
   })
 }
 
