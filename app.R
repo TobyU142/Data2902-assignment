@@ -34,8 +34,10 @@ num_list <- list(
 
 # Define the list of categorical variables
 cat_list <- list(
+  trimester_or_semester = cleaned_trimester_or_semester,
   target_grade = cleaned_target_grade,
-  assignment = cleaned_assignment,
+  assignment_preference = cleaned_assignment,
+  work_status = cleaned_work_status,
   tendency_yes_or_no = cleaned_tendency_yes_or_no,
   pay_rent = cleaned_pay_rent,
   stall_choice = cleaned_stall_choice,
@@ -236,7 +238,6 @@ server <- function(input, output, session) {
       sep = "\n"
     )
     
-    # Normality check using Shapiro-Wilk test
     assumption_text <- paste(assumption_text,
                              "NORMALITY CHECK (Shapiro-Wilk test, p > 0.05 indicates normality):",
                              sep = "\n")
@@ -282,7 +283,6 @@ server <- function(input, output, session) {
                                  sep = "\n")
       }
     }
-    
     
     
     # Equal variances check (F-test)
